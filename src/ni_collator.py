@@ -32,6 +32,7 @@ class DataCollatorForNI:
     demo_dict: Dict[str, List] = None
     decoder_only: bool = False
     has_demo: bool = False
+    chatGPT: bool = False # If the demo is for chatGPT.
 
     def __call__(self, batch, return_tensors=None):
 
@@ -69,19 +70,23 @@ class DataCollatorForNI:
                 add_explanation = self.add_explanation 
 
             task_input = ""
+            source = "" 
 
             if not self.icil and self.num_pos_examples == 0:
-                task_input += "Now complete the following example -\n"
+                if self.chatGPT:
+                    source += "Solve the following task described in the definition and generate the output corresponding to the definition without any explanation.\n"
+                else:
+                    task_input += "Now complete the following example -\n"
+            
             task_input += f"Input: {instance['Instance']['input'].strip()}"
             if not task_input[-1] in string.punctuation:
                 task_input += "."
             task_input += "\n"
             task_input += "Output: "
-
             
             task_name = ""
-            if add_task_name:
-                task_name += instance["Task"] + ". "
+            # if add_task_name:
+            #     task_name += instance["Task"] + ". "
 
             definition = ""
             if add_task_definition:
@@ -93,7 +98,7 @@ class DataCollatorForNI:
                     definition += "."
                 definition += "\n\n"
             
-            # try to add positive examples.
+            # Few-Shot Case
             if not self.icil and self.num_pos_examples != 0:
                 
                 # Restrain sample number inevitably, if longer than length limit.
@@ -124,8 +129,10 @@ class DataCollatorForNI:
                     source = definition + task_name + source + task_input
 
             elif not self.icil:
-                source = task_name + definition + task_input  
+                # Zero-Shot Case
+                source = source + task_name + definition + task_input  
             else:
+                # ICIL Case.
                 task_input = f"Input: {instance['Instance']['input'].strip()}"
                 if not task_input[-1] in string.punctuation:
                     task_input += "."
@@ -139,9 +146,15 @@ class DataCollatorForNI:
                         demo_file = json.load(open(self.demo_path))["demo"]
                     elif self.has_demo:
                         demo_file = instance['demo']
-                        
-                    if self.adaptive:
 
+                    prefix = ""
+                    postfix = ""
+
+                    if self.chatGPT:
+                        prefix = "Here are a few examples to solve the task described in the definition and to generate the output corresponding to the definition and input without any explanation.\n" 
+                        postfix = "Solve the following task described in the definition and generate the output corresponding to the definition without any explanation.\n"
+
+                    if self.adaptive:
                         def max_index(numbers, N):
                             total = 0
                             for i, num in enumerate(numbers):
@@ -152,15 +165,18 @@ class DataCollatorForNI:
 
                         lens = [len(x) + 2 for x in self.tokenizer(demo_file)['input_ids']] # 2, for "\n\n"
                         
-                        max_length =  self.max_source_length # 2048, which is maximum davinci input length.
+                        max_length = self.max_source_length # 2048, which is maximum davinci input length.                        
+                        max_length -= len(prefix) + len(postfix)
                         max_length -= len(self.tokenizer(definition)['input_ids']) + len(self.tokenizer(task_input)['input_ids'])  # target input length
                         max_length -= 2 # last "\n\n"
 
                         idx = max_index(lens, max_length) 
-                        source = "\n\n".join(demo_file[:idx]) + "\n\n"
+                        source = prefix + "\n\n".join(demo_file[:idx]) + "\n\n" + postfix
 
                     else:
-                        source = "\n\n".join(demo_file) + "\n\n" 
+                        source = prefix + "\n\n".join(demo_file) + "\n\n" + postfix 
+                else:
+                    assert False, "Please specify a demo path with --demo_path option. "
 
                 source = source + task_name + definition + task_input  
 
